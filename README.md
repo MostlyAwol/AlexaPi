@@ -10,12 +10,16 @@
 * [Chris Kennedy](http://ck37.com)
 * [Anand](http://padfoot.in)
 
+* OLED I2C SSD1306 Support Added by Jay Clark
+* Added Volume Support through Echo Voice Commands
+
 ---
  
 This is the code needed to Turn a Raspberry Pi into a client for Amazon's Alexa service, I have developed this against the Pi 2 but I see no reason it shouldn't run on the other models. Feedback welcome.
+This code works well on a Raspberry Pi Zero.
 ---
 
-##NOTE This branch is beta, the MASTER is still the recommended build
+##NOTE This branch is beta, the MASTER is still the recommended build. (https://github.com/sammachin/AlexaPi) 
 
 ### Requirements
 
@@ -23,9 +27,12 @@ You will need:
 * A Raspberry Pi
 * An SD Card with a fresh install of Raspbian (tested against build 2015-11-21 Jessie)
 * An External Speaker with 3.5mm Jack
-* A USB Sound Dongle and Microphone
+* A USB Sound Dongle and Microphone - Known devices that work with Raspbian with no issues
+** Kingwin USB 3D Sound Adapter - (https://www.amazon.com/gp/product/B00TZFEZWA/ref=oh_aui_detailpage_o00_s00?ie=UTF8&psc=1)
+** Super Mini USB 2.0 Mic (https://www.amazon.com/gp/product/B00M3UJ42A/ref=oh_aui_detailpage_o01_s00?ie=UTF8&psc=1)
 * A push to make button connected between GPIO 18 and GND
-* (Optionally) A Dual colour LED (or 2 signle LEDs) Connected to GPIO 24 & 25
+* (Optionally) A Dual colour LED (or 2 signle LEDs) Connected to GPIO 24 & 25 - Removed due to having an OLED Screen
+* DIYMall 0.96" I2C 128x64 OLED is used with the Pi Zero (https://www.amazon.com/gp/product/B01HEBIJKK/ref=oh_aui_detailpage_o00_s01?ie=UTF8&psc=1)
 
 
 Next you need to obtain a set of credentials from Amazon to use the Alexa Voice service, login at http://developer.amazon.com and Goto Alexa then Alexa Voice Service
@@ -83,4 +90,5 @@ The auth token is generated from the request_token the auth_token is then stored
 
 ---
  
+
 
