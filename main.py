@@ -16,14 +16,24 @@ import vlc
 import threading
 import cgi 
 import email
+# OLED Screen Code
+from oled.device import ssd1306, sh1106
+from oled.render import canvas
+from PIL import ImageDraw, ImageFont
 
+#Needed for Screen Output
+import netifaces as ni
+from subprocess import check_output
+import datetime
+
+display = ssd1306(port=1, address=0x3C)
 
 #Settings
-button = 18 		# GPIO Pin with button connected
+button = 19 		# GPIO Pin with button connected
 plb_light = 24		# GPIO Pin for the playback/activity light
 rec_light = 25		# GPIO Pin for the recording light
 lights = [plb_light, rec_light] 	# GPIO Pins with LED's connected
-device = "plughw:1" # Name of your microphone/sound card in arecord -L
+device = "plughw:2" # Name of your microphone/sound card in arecord -L
 
 #Setup
 recorded = False
@@ -38,6 +48,9 @@ streamurl = ""
 streamid = ""
 position = 0
 audioplaying = False
+ipaddress = ""
+font = ImageFont.load_default()
+volume = 100
 
 #Debug
 debug = 1
@@ -80,7 +93,8 @@ def gettoken():
 def alexa_speech_recognizer():
 	# https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/rest/speechrecognizer-requests
 	if debug: print("{}Sending Speech Request...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-	GPIO.output(plb_light, GPIO.HIGH)
+	#GPIO.output(plb_light, GPIO.HIGH)
+	screen(3,'Sending')
 	url = 'https://access-alexa-na.amazon.com/v1/avs/speechrecognizer/recognize'
 	headers = {'Authorization' : 'Bearer %s' % gettoken()}
 	d = {
@@ -117,7 +131,7 @@ def alexa_getnextitem(nav_token):
 	time.sleep(0.5)
         if audioplaying == False:
 		if debug: print("{}Sending GetNextItem Request...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		GPIO.output(plb_light, GPIO.HIGH)
+		#GPIO.output(plb_light, GPIO.HIGH)
 		url = 'https://access-alexa-na.amazon.com/v1/avs/audioplayer/getNextItem'
 		headers = {'Authorization' : 'Bearer %s' % gettoken(), 'content-type' : 'application/json; charset=UTF-8'}
 		d = {
@@ -174,8 +188,9 @@ def alexa_playback_progress_report_request(requestType, playerActivity, streamid
 		if debug: print("{}Playback Progress Report was {}Successful!{}".format(bcolors.OKBLUE, bcolors.OKGREEN, bcolors.ENDC))
 
 def process_response(r):
-	global nav_token, streamurl, streamid
+	global nav_token, streamurl, streamid, volume, p, audioplaying
 	if debug: print("{}Processing Request Response...{}".format(bcolors.OKBLUE, bcolors.ENDC))
+	screen(3,'Processing Response')
 	nav_token = ""
 	streamurl = ""
 	streamid = ""
@@ -194,17 +209,28 @@ def process_response(r):
 				if debug: print("{}NEW CONTENT TYPE RETURNED: {} {}".format(bcolors.WARNING, bcolors.ENDC, payload.get_content_type()))
 		# Now process the response
 		if 'directives' in j['messageBody']:
-			if len(j['messageBody']['directives']) == 0:
-				GPIO.output(rec_light, GPIO.LOW)
-				GPIO.output(plb_light, GPIO.LOW)
+			#if len(j['messageBody']['directives']) == 0:
+				#GPIO.output(rec_light, GPIO.LOW)
+				#GPIO.output(plb_light, GPIO.LOW)
 			for directive in j['messageBody']['directives']:
 				if directive['namespace'] == 'SpeechSynthesizer':
 					if directive['name'] == 'speak':
-						GPIO.output(rec_light, GPIO.LOW)
+						#GPIO.output(rec_light, GPIO.LOW)
 						play_audio(path + "tmpcontent/"+directive['payload']['audioContent'].lstrip("cid:")+".mp3")
 					elif directive['name'] == 'listen':
 						#listen for input - need to implement silence detection for this to be used.
 						if debug: print("{}Further Input Expected, timeout in: {} {}ms".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['timeoutIntervalInMillis']))
+						screen(3,"Input Expected")
+				elif directive['namespace'] == 'Speaker':
+					if directive['name'] == 'SetVolume':
+						if directive['payload']['adjustmentType'] == "absolute":
+							volume = directive['payload']['volume']
+							if audioplaying: p.audio_set_volume(volume)
+							if debug: print("{}Volume Set to: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
+						if directive['payload']['adjustmentType'] == "relative":
+							volume = volume + directive['payload']['volume']
+							if audioplaying: p.audio_set_volume(volume)
+							if debug: print("{}Volume Set By: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
 				elif directive['namespace'] == 'AudioPlayer':
 					#do audio stuff - still need to honor the playBehavior
 					if directive['name'] == 'play':
@@ -233,22 +259,24 @@ def process_response(r):
 			
 		return
 	elif r.status_code == 204:
-		GPIO.output(rec_light, GPIO.LOW)
+		#GPIO.output(rec_light, GPIO.LOW)
 		for x in range(0, 3):
 			time.sleep(.2)
-			GPIO.output(plb_light, GPIO.HIGH)
+			#GPIO.output(plb_light, GPIO.HIGH)
 			time.sleep(.2)
-			GPIO.output(plb_light, GPIO.LOW)
+			#GPIO.output(plb_light, GPIO.LOW)
 		if debug: print("{}Request Response is null {}(This is OKAY!){}".format(bcolors.OKBLUE, bcolors.OKGREEN, bcolors.ENDC))
+		screen(3,'Response is Empty')
 	else:
 		print("{}(process_response Error){} Status Code: {}".format(bcolors.WARNING, bcolors.ENDC, r.status_code))
+		screen(3,'Error')
 		r.connection.close()
-		GPIO.output(lights, GPIO.LOW)
+		#GPIO.output(lights, GPIO.LOW)
 		for x in range(0, 3):
 			time.sleep(.2)
-			GPIO.output(rec_light, GPIO.HIGH)
+			#GPIO.output(rec_light, GPIO.HIGH)
 			time.sleep(.2)
-			GPIO.output(lights, GPIO.LOW)
+			#GPIO.output(lights, GPIO.LOW)
 
 
 def tuneinplaylist(url):
@@ -263,9 +291,9 @@ def tuneinplaylist(url):
 def play_audio(file, offset=0):
 	if file.startswith('http://opml.radiotime.com'):
 		file = tuneinplaylist(file)
-	global nav_token, p, audioplaying
+	global nav_token, p, audioplaying, volume
 	if debug: print("{}Play_Audio Request for:{} {}".format(bcolors.OKBLUE, bcolors.ENDC, file))
-	GPIO.output(plb_light, GPIO.HIGH)
+	#GPIO.output(plb_light, GPIO.HIGH)
 	i = vlc.Instance('--aout=alsa')
 	m = i.media_new(file)
 	p = i.media_player_new()
@@ -273,11 +301,11 @@ def play_audio(file, offset=0):
 	mm = m.event_manager()
 	mm.event_attach(vlc.EventType.MediaStateChanged, state_callback, p)
 	audioplaying = True
-	p.audio_set_volume(100)
+	p.audio_set_volume(volume)
 	p.play()
 	while audioplaying:
 		continue
-	GPIO.output(plb_light, GPIO.LOW)
+	#GPIO.output(plb_light, GPIO.LOW)
 
 
 def state_callback(event, player):
@@ -292,6 +320,7 @@ def state_callback(event, player):
 	#6: 'Ended'
 	#7: 'Error'
 	if debug: print("{}Player State:{} {}".format(bcolors.OKGREEN, bcolors.ENDC, state))
+	#Update Player State to screen here!
 	if state == 3:		#Playing
 		if streamid != "":
 			rThread = threading.Thread(target=alexa_playback_progress_report_request, args=("STARTED", "PLAYING", streamid))
@@ -356,37 +385,57 @@ def format_time(self, milliseconds):
 
 def start():
 	global audioplaying, p
+	GPIO.add_event_detect(button, GPIO.FALLING, bouncetime=300)
 	while True:
-		print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
-		if audioplaying: p.stop()
-		print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		GPIO.output(rec_light, GPIO.HIGH)
-		inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
-		inp.setchannels(1)
-		inp.setrate(16000)
-		inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-		inp.setperiodsize(500)
-		audio = ""
-		while(GPIO.input(button)==0): # we keep recording while the button is pressed
-			l, data = inp.read()
-			if l:
-				audio += data
-		print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		rf = open(path+'recording.wav', 'w')
-		rf.write(audio)
-		rf.close()
-		inp = None
-		alexa_speech_recognizer()
+		#print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
+		screen(3,'Ready...')
+		now = datetime.datetime.now()
+		localtime = now.strftime("%a %m-%d %H:%M:%S")
+		#screen(2,localtime)
+		#GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
+		#--------------
+		if GPIO.event_detected(button):
+			if audioplaying:
+				p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.
+			print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
+			screen(3,'Recording')
+			#GPIO.output(rec_light, GPIO.HIGH)
+			inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
+			inp.setchannels(1)
+			inp.setrate(16000)
+			inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+			inp.setperiodsize(500)
+			audio = ""
+			while(GPIO.input(button)==0): # we keep recording while the button is pressed
+				l, data = inp.read()
+				if l:
+					audio += data
+			print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
+			screen(3,'Recording Done')
+			rf = open(path+'recording.wav', 'w')
+			rf.write(audio)
+			rf.close()
+			inp = None
+			alexa_speech_recognizer()
+		#---------------
+		ni.ifaddresses('wlan0')
+		ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
+		screen(0,'IP: '+ipaddress)
+		scanoutput = check_output(["iwconfig", "wlan0"])
+		for line in scanoutput.splitlines():
+				if line.startswith("wlan0"):
+						ssid = line.split('"')[1]
+		screen(1,'SSID: '+ssid)
 
 
 def setup():
+	global ipaddress
 	GPIO.setwarnings(False)
 	GPIO.cleanup()
 	GPIO.setmode(GPIO.BCM)
 	GPIO.setup(button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-	GPIO.setup(lights, GPIO.OUT)
-	GPIO.output(lights, GPIO.LOW)
+	#GPIO.setup(lights, GPIO.OUT)
+	#GPIO.output(lights, GPIO.LOW)
 	while internet_on() == False:
 		print(".")
 	token = gettoken()
@@ -394,16 +443,38 @@ def setup():
 		while True:
 			for x in range(0, 5):
 				time.sleep(.1)
-				GPIO.output(rec_light, GPIO.HIGH)
-				time.sleep(.1)
-				GPIO.output(rec_light, GPIO.LOW)
+				#GPIO.output(rec_light, GPIO.HIGH)
+				#time.sleep(.1)
+				#GPIO.output(rec_light, GPIO.LOW)
 	for x in range(0, 5):
 		time.sleep(.1)
-		GPIO.output(plb_light, GPIO.HIGH)
-		time.sleep(.1)
-		GPIO.output(plb_light, GPIO.LOW)
+		#GPIO.output(plb_light, GPIO.HIGH)
+		#time.sleep(.1)
+		#GPIO.output(plb_light, GPIO.LOW)
 	play_audio(path+"hello.mp3")
+	ni.ifaddresses('wlan0')
+	ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
+	print ("IP Address = "+ ipaddress)
+	screen(0,'IP: '+ipaddress)
+	scanoutput = check_output(["iwconfig", "wlan0"])
+	for line in scanoutput.splitlines():
+		if line.startswith("wlan0"):
+			ssid = line.split('"')[1]
+	screen(1,'SSID: '+ssid)
+	screen(2,'Alexa Ready')
 
+################ THIS CODE WORKS! ###################
+lines = ["","","",""]
+
+def screen(position,str):
+        global lines
+        lines[position] = str
+        position = position * 16 - 1
+        with canvas(display) as draw:
+                for i in range(0,4):
+			if lines[i] == "":
+				continue
+                        draw.text((2,i*15+2), lines[i],font=font,fill=255)
 
 if __name__ == "__main__":
 	setup()
