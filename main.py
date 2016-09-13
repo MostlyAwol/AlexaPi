@@ -16,6 +16,8 @@ import vlc
 import threading
 import cgi 
 import email
+import signal
+import sys
 # OLED Screen Code
 from oled.device import ssd1306, sh1106
 from oled.render import canvas
@@ -65,6 +67,16 @@ class bcolors:
 	BOLD = '\033[1m'
 	UNDERLINE = '\033[4m'
 
+class SigTermShutdown:
+
+	shutdown = False
+	def __init__(self):
+		signal.signal(signal.SIGINT, self.exit_gracefully)
+		signal.signal(signal.SIGTERM, self.exit_gracefully)
+	
+	def exit_gracefully(self,signum, frame):
+		self.shutdown = True
+	
 def internet_on():
 	print("Checking Internet Connection...")
 	try:
@@ -214,6 +226,7 @@ def process_response(r):
 				#GPIO.output(plb_light, GPIO.LOW)
 			for directive in j['messageBody']['directives']:
 				if directive['namespace'] == 'SpeechSynthesizer':
+					if audioplaying: p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.
 					if directive['name'] == 'speak':
 						#GPIO.output(rec_light, GPIO.LOW)
 						play_audio(path + "tmpcontent/"+directive['payload']['audioContent'].lstrip("cid:")+".mp3")
@@ -226,12 +239,15 @@ def process_response(r):
 						if directive['payload']['adjustmentType'] == "absolute":
 							volume = directive['payload']['volume']
 							if audioplaying: p.audio_set_volume(volume)
+							screen(0,"")
 							if debug: print("{}Volume Set to: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
 						if directive['payload']['adjustmentType'] == "relative":
 							volume = volume + directive['payload']['volume']
 							if audioplaying: p.audio_set_volume(volume)
+							screen(0,"")
 							if debug: print("{}Volume Set By: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
 				elif directive['namespace'] == 'AudioPlayer':
+					if audioplaying: p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.
 					#do audio stuff - still need to honor the playBehavior
 					if directive['name'] == 'play':
 						nav_token = directive['payload']['navigationToken']
@@ -254,6 +270,7 @@ def process_response(r):
 					content = path + "tmpcontent/"+stream['streamUrl'].lstrip("cid:")+".mp3"
 				else:
 					content = stream['streamUrl']
+				if audioplaying: p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.	
 				pThread = threading.Thread(target=play_audio, args=(content, stream['offsetInMilliseconds']))
 				pThread.start()
 			
@@ -387,6 +404,9 @@ def start():
 	global audioplaying, p
 	GPIO.add_event_detect(button, GPIO.FALLING, bouncetime=300)
 	while True:
+		if Listener.shutdown:
+			#Program received a Kill Signal from Termial Exit program
+			exit
 		#print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
 		screen(3,'Ready...')
 		now = datetime.datetime.now()
@@ -395,8 +415,7 @@ def start():
 		#GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
 		#--------------
 		if GPIO.event_detected(button):
-			if audioplaying:
-				p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.
+			if audioplaying: p.audio_set_volume(15)
 			print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
 			screen(3,'Recording')
 			#GPIO.output(rec_light, GPIO.HIGH)
@@ -416,16 +435,17 @@ def start():
 			rf.write(audio)
 			rf.close()
 			inp = None
+			if audioplaying: p.audio_set_volume(volume)
 			alexa_speech_recognizer()
 		#---------------
 		ni.ifaddresses('wlan0')
 		ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
-		screen(0,'IP: '+ipaddress)
+		screen(1,'IP: '+ipaddress)
 		scanoutput = check_output(["iwconfig", "wlan0"])
 		for line in scanoutput.splitlines():
 				if line.startswith("wlan0"):
 						ssid = line.split('"')[1]
-		screen(1,'SSID: '+ssid)
+		screen(2,'SSID: '+ssid)
 
 
 def setup():
@@ -434,48 +454,47 @@ def setup():
 	GPIO.cleanup()
 	GPIO.setmode(GPIO.BCM)
 	GPIO.setup(button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-	#GPIO.setup(lights, GPIO.OUT)
-	#GPIO.output(lights, GPIO.LOW)
 	while internet_on() == False:
 		print(".")
 	token = gettoken()
 	if token == False:
 		while True:
 			for x in range(0, 5):
-				time.sleep(.1)
-				#GPIO.output(rec_light, GPIO.HIGH)
-				#time.sleep(.1)
-				#GPIO.output(rec_light, GPIO.LOW)
-	for x in range(0, 5):
-		time.sleep(.1)
-		#GPIO.output(plb_light, GPIO.HIGH)
-		#time.sleep(.1)
-		#GPIO.output(plb_light, GPIO.LOW)
+				print "No Token and STUCK!"
+
 	play_audio(path+"hello.mp3")
+
+	#Add info to the OLED Screen
 	ni.ifaddresses('wlan0')
 	ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
 	print ("IP Address = "+ ipaddress)
-	screen(0,'IP: '+ipaddress)
+	screen(1,'IP: '+ipaddress)
 	scanoutput = check_output(["iwconfig", "wlan0"])
 	for line in scanoutput.splitlines():
 		if line.startswith("wlan0"):
 			ssid = line.split('"')[1]
-	screen(1,'SSID: '+ssid)
-	screen(2,'Alexa Ready')
+	screen(2,'SSID: '+ssid)
 
 ################ THIS CODE WORKS! ###################
 lines = ["","","",""]
 
 def screen(position,str):
-        global lines
-        lines[position] = str
-        position = position * 16 - 1
-        with canvas(display) as draw:
-                for i in range(0,4):
-			if lines[i] == "":
-				continue
-                        draw.text((2,i*15+2), lines[i],font=font,fill=255)
+	global lines, volume
+	lines[position] = str
+	position = position * 16 - 1
+	with canvas(display) as draw:
+		for i in range(0,4):
+			if i == 0:
+				#Volume is done on the first line always!
+				len = 124 * volume / 100
+				draw.rectangle((0,0,display.width-1,15), outline=255, fill=0)
+				draw.rectangle((2,2,len,13), outline=255, fill=255)
+			else:
+				if lines[i] == "":
+					continue
+				draw.text((2,i*15+2), lines[i],font=font,fill=255)
 
 if __name__ == "__main__":
+	Listener = SigTermShutdown()
 	setup()
 	start()
