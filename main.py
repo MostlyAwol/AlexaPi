@@ -17,7 +17,8 @@ import threading
 import cgi 
 import email
 import signal
-import sys
+import sys, traceback
+
 # OLED Screen Code
 from oled.device import ssd1306, sh1106
 from oled.render import canvas
@@ -27,6 +28,9 @@ from PIL import ImageDraw, ImageFont
 import netifaces as ni
 from subprocess import check_output
 import datetime
+
+#Config File
+import ConfigParser
 
 display = ssd1306(port=1, address=0x3C)
 
@@ -67,15 +71,12 @@ class bcolors:
 	BOLD = '\033[1m'
 	UNDERLINE = '\033[4m'
 
-class SigTermShutdown:
-
-	shutdown = False
-	def __init__(self):
-		signal.signal(signal.SIGINT, self.exit_gracefully)
-		signal.signal(signal.SIGTERM, self.exit_gracefully)
-	
-	def exit_gracefully(self,signum, frame):
-		self.shutdown = True
+def ReadConfig():
+	global volume
+	Config = ConfigParser.ConfigParser()
+	Config.read("./setting.ini")
+	volume = int(Config.get("Settings", "volume"))
+	return True
 	
 def internet_on():
 	print("Checking Internet Connection...")
@@ -239,12 +240,10 @@ def process_response(r):
 						if directive['payload']['adjustmentType'] == "absolute":
 							volume = directive['payload']['volume']
 							if audioplaying: p.audio_set_volume(volume)
-							screen(0,"")
 							if debug: print("{}Volume Set to: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
 						if directive['payload']['adjustmentType'] == "relative":
 							volume = volume + directive['payload']['volume']
 							if audioplaying: p.audio_set_volume(volume)
-							screen(0,"")
 							if debug: print("{}Volume Set By: {} {}".format(bcolors.OKBLUE, bcolors.ENDC, directive['payload']['volume']))
 				elif directive['namespace'] == 'AudioPlayer':
 					if audioplaying: p.stop() #Stops all music or streams. I need to move and make it pause or whatever until I can start it again.
@@ -401,52 +400,59 @@ def format_time(self, milliseconds):
 	return "%d:%02d:%02d" % (h, m, s)
 
 def start():
-	global audioplaying, p
-	GPIO.add_event_detect(button, GPIO.FALLING, bouncetime=300)
-	while True:
-		if Listener.shutdown:
-			#Program received a Kill Signal from Termial Exit program
-			exit
-		#print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-		screen(3,'Ready...')
-		now = datetime.datetime.now()
-		localtime = now.strftime("%a %m-%d %H:%M:%S")
-		#screen(2,localtime)
-		#GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
-		#--------------
-		if GPIO.event_detected(button):
-			if audioplaying: p.audio_set_volume(15)
-			print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
-			screen(3,'Recording')
-			#GPIO.output(rec_light, GPIO.HIGH)
-			inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
-			inp.setchannels(1)
-			inp.setrate(16000)
-			inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-			inp.setperiodsize(500)
-			audio = ""
-			while(GPIO.input(button)==0): # we keep recording while the button is pressed
-				l, data = inp.read()
-				if l:
-					audio += data
-			print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
-			screen(3,'Recording Done')
-			rf = open(path+'recording.wav', 'w')
-			rf.write(audio)
-			rf.close()
-			inp = None
-			if audioplaying: p.audio_set_volume(volume)
-			alexa_speech_recognizer()
-		#---------------
-		ni.ifaddresses('wlan0')
-		ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
-		screen(1,'IP: '+ipaddress)
-		scanoutput = check_output(["iwconfig", "wlan0"])
-		for line in scanoutput.splitlines():
+	try:
+		global audioplaying, p, Listener
+		GPIO.add_event_detect(button, GPIO.FALLING, bouncetime=300)
+		while True:
+			#print("{}Ready to Record.{}".format(bcolors.OKBLUE, bcolors.ENDC))
+			screen(3,'Ready...')
+			now = datetime.datetime.now()
+			localtime = now.strftime("%a %m-%d %H:%M:%S")
+			#screen(2,localtime)
+			#GPIO.wait_for_edge(button, GPIO.FALLING) # we wait for the button to be pressed
+			#--------------
+			if GPIO.event_detected(button):
+				if audioplaying: p.audio_set_volume(15)
+				time.sleep(0.2)
+				print("{}Recording...{}".format(bcolors.OKBLUE, bcolors.ENDC))
+				screen(3,'Recording')
+				#GPIO.output(rec_light, GPIO.HIGH)
+				inp = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, device)
+				inp.setchannels(1)
+				inp.setrate(16000)
+				inp.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+				inp.setperiodsize(500)
+				audio = ""
+				while(GPIO.input(button)==0): # we keep recording while the button is pressed
+					l, data = inp.read()
+					if l:
+						audio += data
+				print("{}Recording Finished.{}".format(bcolors.OKBLUE, bcolors.ENDC))
+				screen(3,'Recording Done')
+				rf = open(path+'recording.wav', 'w')
+				rf.write(audio)
+				rf.close()
+				inp = None
+				if audioplaying: p.audio_set_volume(volume)
+				alexa_speech_recognizer()
+			#---------------
+			ni.ifaddresses('wlan0')
+			ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
+			screen(1,'IP: '+ipaddress)
+			scanoutput = check_output(["iwconfig", "wlan0"])
+			for line in scanoutput.splitlines():
 				if line.startswith("wlan0"):
-						ssid = line.split('"')[1]
-		screen(2,'SSID: '+ssid)
-
+					ssid = line.split('"')[1]
+			screen(2,'SSID: '+ssid)
+	except KeyboardInterrupt:
+		print "Shutdown requested...exiting"
+		screen(1,"")
+		screen(2,"")
+		screen(3,"")
+		screen(0,"clear")
+	except Exception:
+		traceback.print_exc(file=sys.stdout)
+	sys.exit(0)
 
 def setup():
 	global ipaddress
@@ -461,9 +467,8 @@ def setup():
 		while True:
 			for x in range(0, 5):
 				print "No Token and STUCK!"
-
-	play_audio(path+"hello.mp3")
-
+	#Open Settings File and process the info
+	ReadConfig()
 	#Add info to the OLED Screen
 	ni.ifaddresses('wlan0')
 	ipaddress = ni.ifaddresses('wlan0')[2][0]['addr']
@@ -475,6 +480,9 @@ def setup():
 			ssid = line.split('"')[1]
 	screen(2,'SSID: '+ssid)
 
+	play_audio(path+"hello.mp3")
+
+
 ################ THIS CODE WORKS! ###################
 lines = ["","","",""]
 
@@ -485,16 +493,15 @@ def screen(position,str):
 	with canvas(display) as draw:
 		for i in range(0,4):
 			if i == 0:
-				#Volume is done on the first line always!
-				len = 124 * volume / 100
-				draw.rectangle((0,0,display.width-1,15), outline=255, fill=0)
-				draw.rectangle((2,2,len,13), outline=255, fill=255)
+				if str != "clear":
+					#Volume is done on the first line always!
+					len = 124 * volume / 100
+					draw.rectangle((0,0,display.width-1,15), outline=255, fill=0)
+					draw.rectangle((2,2,len,13), outline=255, fill=255)
 			else:
-				if lines[i] == "":
-					continue
-				draw.text((2,i*15+2), lines[i],font=font,fill=255)
+				if lines[i] != "":
+					draw.text((2,i*15+2), lines[i],font=font,fill=255)
 
 if __name__ == "__main__":
-	Listener = SigTermShutdown()
 	setup()
 	start()
